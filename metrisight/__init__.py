@@ -1,6 +1,6 @@
 """MetriSight - Lightweight metric anomaly detection dashboard."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from metrisight.detector import detect_zscore, detect_moving_avg, get_anomaly_summary
 from metrisight.simulator import generate_metrics
