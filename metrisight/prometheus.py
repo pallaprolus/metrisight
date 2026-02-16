@@ -1,15 +1,16 @@
 """Prometheus HTTP API client for querying time-series metrics."""
 
 from datetime import datetime, timedelta
+from typing import Dict, Optional, Tuple
 
 import pandas as pd
 import requests
 
 
 def _build_auth(
-    bearer_token: str | None = None,
-    basic_auth: tuple[str, str] | None = None,
-) -> tuple[dict, tuple | None]:
+    bearer_token: Optional[str] = None,
+    basic_auth: Optional[Tuple[str, str]] = None,
+) -> Tuple[Dict, Optional[tuple]]:
     """Build auth headers and auth tuple for requests.
 
     Args:
@@ -34,8 +35,8 @@ def query_prometheus(
     lookback_hours: float = 24,
     step_seconds: int = 60,
     timeout: int = 30,
-    bearer_token: str | None = None,
-    basic_auth: tuple[str, str] | None = None,
+    bearer_token: Optional[str] = None,
+    basic_auth: Optional[Tuple[str, str]] = None,
 ) -> pd.DataFrame:
     """Query Prometheus range API and return a DataFrame.
 
@@ -110,9 +111,9 @@ def query_prometheus(
 def check_connection(
     url: str,
     timeout: int = 5,
-    bearer_token: str | None = None,
-    basic_auth: tuple[str, str] | None = None,
-) -> tuple[bool, str]:
+    bearer_token: Optional[str] = None,
+    basic_auth: Optional[Tuple[str, str]] = None,
+) -> Tuple[bool, str]:
     """Check if a Prometheus instance is reachable.
 
     Args:

@@ -1,5 +1,7 @@
 """Simulates realistic time-series metrics with injected anomalies."""
 
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
@@ -10,7 +12,7 @@ def generate_metrics(
     duration_hours: int = 24,
     interval_seconds: int = 60,
     anomaly_ratio: float = 0.03,
-    seed: int | None = None,
+    seed: Optional[int] = None,
 ) -> pd.DataFrame:
     """Generate simulated metric data with injected anomalies.
 
