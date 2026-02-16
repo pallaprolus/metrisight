@@ -111,10 +111,42 @@ with st.sidebar:
             }[x],
         )
 
+        # --- Authentication ---
+        st.divider()
+        auth_method = st.radio(
+            "Authentication",
+            ["none", "bearer", "basic"],
+            format_func=lambda x: {
+                "none": "None (no auth)",
+                "bearer": "Bearer Token",
+                "basic": "Basic Auth",
+            }[x],
+            help="Most local setups need no auth. Grafana Cloud and managed Prometheus use Bearer Token.",
+        )
+
+        prom_bearer_token = None
+        prom_basic_auth = None
+
+        if auth_method == "bearer":
+            prom_bearer_token = st.text_input(
+                "Bearer Token",
+                type="password",
+                help="API token (e.g., from Grafana Cloud, Thanos, or Cortex)",
+            )
+        elif auth_method == "basic":
+            prom_basic_user = st.text_input("Username")
+            prom_basic_pass = st.text_input("Password", type="password")
+            if prom_basic_user and prom_basic_pass:
+                prom_basic_auth = (prom_basic_user, prom_basic_pass)
+
         # Connection test button
         if st.button("🔌 Test Connection", use_container_width=True):
             with st.spinner("Connecting..."):
-                ok, msg = check_connection(prom_url)
+                ok, msg = check_connection(
+                    prom_url,
+                    bearer_token=prom_bearer_token,
+                    basic_auth=prom_basic_auth,
+                )
             if ok:
                 st.success(msg)
             else:
@@ -140,6 +172,8 @@ if data_source == "prometheus":
                 query=prom_query,
                 lookback_hours=lookback,
                 step_seconds=step,
+                bearer_token=prom_bearer_token,
+                basic_auth=prom_basic_auth,
             )
         if len(raw_df) == 0:
             st.warning("Prometheus returned no data for this query. Check your PromQL expression.")

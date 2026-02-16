@@ -116,6 +116,45 @@ class TestQueryPrometheus:
         assert params["query"] == "up"
         assert params["step"] == "30s"
 
+    @patch("metrisight.prometheus.requests.get")
+    def test_bearer_token_sent_in_header(self, mock_get):
+        mock_get.return_value = _mock_prom_response([[1700000000, "1.0"]])
+
+        query_prometheus(
+            "http://prom:9090",
+            "up",
+            bearer_token="my-secret-token",
+        )
+
+        call_args = mock_get.call_args
+        headers = call_args[1]["headers"]
+        assert headers["Authorization"] == "Bearer my-secret-token"
+        assert call_args[1]["auth"] is None
+
+    @patch("metrisight.prometheus.requests.get")
+    def test_basic_auth_sent(self, mock_get):
+        mock_get.return_value = _mock_prom_response([[1700000000, "1.0"]])
+
+        query_prometheus(
+            "http://prom:9090",
+            "up",
+            basic_auth=("admin", "password123"),
+        )
+
+        call_args = mock_get.call_args
+        assert call_args[1]["auth"] == ("admin", "password123")
+        assert call_args[1]["headers"] == {}
+
+    @patch("metrisight.prometheus.requests.get")
+    def test_no_auth_by_default(self, mock_get):
+        mock_get.return_value = _mock_prom_response([[1700000000, "1.0"]])
+
+        query_prometheus("http://prom:9090", "up")
+
+        call_args = mock_get.call_args
+        assert call_args[1]["headers"] == {}
+        assert call_args[1]["auth"] is None
+
 
 class TestCheckConnection:
     @patch("metrisight.prometheus.requests.get")
@@ -146,3 +185,47 @@ class TestCheckConnection:
         ok, msg = check_connection("http://localhost:9090")
         assert ok is False
         assert "timed out" in msg
+
+    @patch("metrisight.prometheus.requests.get")
+    def test_401_unauthorized(self, mock_get):
+        resp = MagicMock()
+        resp.status_code = 401
+        mock_get.return_value = resp
+
+        ok, msg = check_connection("http://localhost:9090")
+        assert ok is False
+        assert "401" in msg
+
+    @patch("metrisight.prometheus.requests.get")
+    def test_403_forbidden(self, mock_get):
+        resp = MagicMock()
+        resp.status_code = 403
+        mock_get.return_value = resp
+
+        ok, msg = check_connection("http://localhost:9090")
+        assert ok is False
+        assert "403" in msg
+
+    @patch("metrisight.prometheus.requests.get")
+    def test_bearer_token_passed(self, mock_get):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"data": {"version": "2.48.0"}}
+        mock_get.return_value = resp
+
+        ok, msg = check_connection("http://localhost:9090", bearer_token="tok123")
+        assert ok is True
+        call_args = mock_get.call_args
+        assert call_args[1]["headers"]["Authorization"] == "Bearer tok123"
+
+    @patch("metrisight.prometheus.requests.get")
+    def test_basic_auth_passed(self, mock_get):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"data": {"version": "2.48.0"}}
+        mock_get.return_value = resp
+
+        ok, msg = check_connection("http://localhost:9090", basic_auth=("user", "pass"))
+        assert ok is True
+        call_args = mock_get.call_args
+        assert call_args[1]["auth"] == ("user", "pass")
