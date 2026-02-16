@@ -52,6 +52,25 @@ rate(http_requests_total{status=~"5.."}[5m])
 rate(node_disk_io_time_seconds_total[5m])
 ```
 
+### Authentication
+
+MetriSight supports authenticated Prometheus instances. Select the auth method in the sidebar under the Prometheus section.
+
+| Method | When to use | Setup |
+|--------|-------------|-------|
+| **None** | Local/internal Prometheus without auth | Default, no config needed |
+| **Bearer Token** | Grafana Cloud, Thanos, Cortex, managed Prometheus | Paste your API token |
+| **Basic Auth** | Prometheus behind nginx/Apache reverse proxy | Enter username + password |
+
+Credentials are passed via HTTP headers only — they are **never logged, stored on disk, or displayed** in the UI (password fields are masked).
+
+**Grafana Cloud example:**
+
+1. Get your API token from Grafana Cloud > your stack > Prometheus > Details
+2. Set Prometheus URL to your Grafana Cloud Prometheus endpoint (e.g., `https://prometheus-prod-01-eu-west-0.grafana.net/api/prom`)
+3. Select **Bearer Token** and paste your API key
+4. Click **Test Connection** to verify — you'll see the Prometheus version if auth succeeds, or a `401 Unauthorized` error if the token is wrong
+
 ### How it works
 
 - MetriSight queries the Prometheus `/api/v1/query_range` endpoint
