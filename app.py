@@ -1,5 +1,6 @@
 """MetriSight - Lightweight Metric Anomaly Dashboard."""
 
+import pandas as pd
 import streamlit as st
 
 from metrisight.simulator import generate_metrics
@@ -15,11 +16,21 @@ st.caption("Lightweight metric anomaly detection dashboard")
 with st.sidebar:
     st.header("Configuration")
 
-    metric = st.selectbox("Metric", ["cpu", "memory", "latency"], format_func=lambda x: {
-        "cpu": "CPU Usage (%)",
-        "memory": "Memory Usage (%)",
-        "latency": "Response Latency (ms)",
+    data_source = st.radio("Data Source", ["simulated", "csv_upload"], format_func=lambda x: {
+        "simulated": "Simulated Metrics",
+        "csv_upload": "Upload CSV",
     }[x])
+
+    st.divider()
+
+    if data_source == "simulated":
+        metric = st.selectbox("Metric", ["cpu", "memory", "latency"], format_func=lambda x: {
+            "cpu": "CPU Usage (%)",
+            "memory": "Memory Usage (%)",
+            "latency": "Response Latency (ms)",
+        }[x])
+    else:
+        metric = "custom"
 
     method = st.radio("Detection Method", ["zscore", "moving_avg"], format_func=lambda x: {
         "zscore": "Z-Score",
@@ -37,24 +48,58 @@ with st.sidebar:
         threshold = st.slider("Threshold Multiplier", 1.0, 5.0, 2.0, 0.1,
                               help="Multiplier for rolling std to set bounds")
 
-    st.divider()
+    if data_source == "simulated":
+        st.divider()
 
-    duration = st.selectbox("Time Range", [6, 12, 24, 48], index=2,
-                            format_func=lambda x: f"{x} hours")
+        duration = st.selectbox("Time Range", [6, 12, 24, 48], index=2,
+                                format_func=lambda x: f"{x} hours")
 
-    seed = st.number_input("Random Seed", min_value=0, max_value=9999, value=42,
-                           help="Set seed for reproducible data")
+        seed = st.number_input("Random Seed", min_value=0, max_value=9999, value=42,
+                               help="Set seed for reproducible data")
 
-    regenerate = st.button("🔄 Regenerate Data", use_container_width=True)
+        regenerate = st.button("🔄 Regenerate Data", use_container_width=True)
 
-# --- Generate and detect ---
-cache_key = f"{metric}_{duration}_{seed}"
-if regenerate or cache_key not in st.session_state:
-    st.session_state[cache_key] = generate_metrics(
-        metric_name=metric, duration_hours=duration, seed=seed
-    )
+# --- Load data ---
+raw_df = None
 
-raw_df = st.session_state[cache_key]
+if data_source == "csv_upload":
+    st.subheader("Upload Your Metric Data")
+    st.markdown("""
+    Upload a CSV file with your time-series metric data. Required columns:
+    - **`timestamp`** — datetime (e.g., `2024-01-15 10:30:00`)
+    - **`value`** — numeric metric value
+
+    [Download sample CSV](https://gist.githubusercontent.com/) or use the format below:
+    """)
+    st.code("timestamp,value\n2024-01-15 10:00:00,45.2\n2024-01-15 10:01:00,47.8\n2024-01-15 10:02:00,44.1", language="csv")
+
+    uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
+    if uploaded_file is not None:
+        try:
+            raw_df = pd.read_csv(uploaded_file)
+            # Validate required columns
+            if "timestamp" not in raw_df.columns or "value" not in raw_df.columns:
+                st.error("CSV must have `timestamp` and `value` columns. Found: " + ", ".join(raw_df.columns))
+                raw_df = None
+            else:
+                raw_df["timestamp"] = pd.to_datetime(raw_df["timestamp"])
+                raw_df["value"] = pd.to_numeric(raw_df["value"], errors="coerce")
+                raw_df = raw_df.dropna(subset=["timestamp", "value"])
+                st.success(f"Loaded {len(raw_df):,} data points from `{uploaded_file.name}`")
+        except Exception as e:
+            st.error(f"Failed to parse CSV: {e}")
+            raw_df = None
+else:
+    cache_key = f"{metric}_{duration}_{seed}"
+    if regenerate or cache_key not in st.session_state:
+        st.session_state[cache_key] = generate_metrics(
+            metric_name=metric, duration_hours=duration, seed=seed
+        )
+    raw_df = st.session_state[cache_key]
+
+if raw_df is None or len(raw_df) == 0:
+    st.info("Upload a CSV file to get started, or switch to Simulated Metrics in the sidebar.")
+    st.stop()
 
 if method == "zscore":
     df = detect_zscore(raw_df, threshold=threshold)
