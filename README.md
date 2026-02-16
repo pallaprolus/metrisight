@@ -4,12 +4,12 @@ A lightweight, self-hosted metric anomaly dashboard for developers. Detects anom
 
 ## Features
 
+- **Prometheus live streaming** — connect to any Prometheus instance, auto-refresh on a configurable interval
 - **Real-time anomaly detection** using Z-score and Moving Average methods
 - **Interactive dashboard** with Plotly charts and Streamlit
 - **CSV upload** — bring your own metric data from any source
 - **Simulated metrics** (CPU, Memory, Latency) with injected anomalies for demo
 - **Configurable thresholds** via sidebar controls
-- **Zero external dependencies** — no Prometheus, no cloud services needed to get started
 
 ## Quick Start
 
@@ -18,71 +18,78 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The dashboard opens at `http://localhost:8501`. By default it runs with simulated metrics — switch to **Upload CSV** in the sidebar to use your own data.
+The dashboard opens at `http://localhost:8501`. By default it runs with simulated metrics — switch to **Prometheus (Live)** or **Upload CSV** in the sidebar.
 
-## Connecting Real Data
+## Connecting to Prometheus (Live Streaming)
 
-### Option 1: CSV Upload (Built-in)
+MetriSight connects directly to your Prometheus instance and streams metrics with configurable auto-refresh.
 
-The dashboard supports direct CSV upload. Your CSV needs two columns:
+### Setup
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `timestamp` | datetime | e.g., `2024-01-15 10:30:00` |
-| `value` | numeric | The metric value |
+1. Select **Prometheus (Live)** in the sidebar
+2. Enter your Prometheus URL (e.g., `http://localhost:9090`)
+3. Enter a PromQL query (e.g., `rate(node_cpu_seconds_total{mode="idle"}[5m])`)
+4. Choose a lookback window (1h, 6h, 24h, or 7 days)
+5. Set auto-refresh interval (15s, 30s, 1m, or 5m) for live monitoring
+6. Click **Test Connection** to verify connectivity
 
-**Example CSV:**
+### Example PromQL queries
+
+```promql
+# CPU usage rate
+rate(node_cpu_seconds_total{mode="idle"}[5m])
+
+# Memory usage percentage
+(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100
+
+# HTTP request latency (p95)
+histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
+
+# HTTP error rate
+rate(http_requests_total{status=~"5.."}[5m])
+
+# Disk I/O utilization
+rate(node_disk_io_time_seconds_total[5m])
+```
+
+### How it works
+
+- MetriSight queries the Prometheus `/api/v1/query_range` endpoint
+- The lookback window determines how far back to fetch (rolling window)
+- Auto-refresh re-queries Prometheus on the set interval, so the chart updates with live data
+- Anomaly detection runs on each refresh against the full lookback window
+
+### Lookback window guide
+
+| Window | Best for | Typical resolution |
+|--------|----------|-------------------|
+| 1 hour | Real-time incident triage | 15s |
+| 6 hours | Shift monitoring | 30s - 1m |
+| 24 hours | Daily pattern analysis | 1m |
+| 7 days | Weekly trend detection | 5m |
+
+## Other Data Sources
+
+### CSV Upload
+
+Upload a CSV file with two columns:
 
 ```csv
 timestamp,value
 2024-01-15 10:00:00,45.2
 2024-01-15 10:01:00,47.8
 2024-01-15 10:02:00,44.1
-2024-01-15 10:03:00,92.5
-2024-01-15 10:04:00,46.0
 ```
 
-### Option 2: Export from Prometheus
+### Exporting from other tools
 
-Query Prometheus and export to CSV, then upload:
-
-```bash
-# Using promtool
-promtool query range \
-  --start="2024-01-15T00:00:00Z" \
-  --end="2024-01-15T23:59:59Z" \
-  --step=60s \
-  'node_cpu_seconds_total{mode="idle"}' \
-  | jq -r '["timestamp","value"], (.[] | [.timestamp, .value]) | @csv' \
-  > cpu_metrics.csv
-```
-
-Or use the Prometheus HTTP API:
-
-```bash
-curl -s 'http://localhost:9090/api/v1/query_range?query=node_cpu_seconds_total&start=2024-01-15T00:00:00Z&end=2024-01-15T23:59:59Z&step=60s' \
-  | python3 -c "
-import json, sys, csv
-data = json.load(sys.stdin)['data']['result'][0]['values']
-w = csv.writer(sys.stdout)
-w.writerow(['timestamp', 'value'])
-for ts, val in data:
-    from datetime import datetime
-    w.writerow([datetime.fromtimestamp(ts).isoformat(), val])
-" > metrics.csv
-```
-
-### Option 3: Export from CloudWatch
+**CloudWatch:**
 
 ```bash
 aws cloudwatch get-metric-statistics \
-  --namespace AWS/EC2 \
-  --metric-name CPUUtilization \
-  --start-time 2024-01-15T00:00:00Z \
-  --end-time 2024-01-15T23:59:59Z \
-  --period 60 \
-  --statistics Average \
-  --output json \
+  --namespace AWS/EC2 --metric-name CPUUtilization \
+  --start-time 2024-01-15T00:00:00Z --end-time 2024-01-15T23:59:59Z \
+  --period 60 --statistics Average --output json \
   | python3 -c "
 import json, sys, csv
 data = json.load(sys.stdin)['Datapoints']
@@ -94,12 +101,11 @@ for d in data:
 " > cloudwatch_cpu.csv
 ```
 
-### Option 4: Export from Datadog
+**Datadog:**
 
 ```bash
 curl -s "https://api.datadoghq.com/api/v1/query?from=$(date -d '24 hours ago' +%s)&to=$(date +%s)&query=avg:system.cpu.user{*}" \
-  -H "DD-API-KEY: $DD_API_KEY" \
-  -H "DD-APPLICATION-KEY: $DD_APP_KEY" \
+  -H "DD-API-KEY: $DD_API_KEY" -H "DD-APPLICATION-KEY: $DD_APP_KEY" \
   | python3 -c "
 import json, sys, csv
 from datetime import datetime
@@ -111,50 +117,19 @@ for ts_ms, val in data:
 " > datadog_cpu.csv
 ```
 
-### Option 5: Use the Detector Programmatically
-
-You can use the detection module directly in your own scripts:
+### Programmatic Usage
 
 ```python
 import pandas as pd
-from metrisight.detector import detect_zscore, detect_moving_avg, get_anomaly_summary
+from metrisight.detector import detect_zscore, get_anomaly_summary
 
-# Load your data (from any source)
 df = pd.read_csv("my_metrics.csv")
 df["timestamp"] = pd.to_datetime(df["timestamp"])
 
-# Run anomaly detection
 result = detect_zscore(df, threshold=3.0)
-# or: result = detect_moving_avg(df, window=20, threshold=2.0)
-
-# Get summary
 summary = get_anomaly_summary(result)
 print(f"Found {summary['anomaly_count']} anomalies ({summary['anomaly_pct']}%)")
-
-# Get anomalous data points
-anomalies = result[result["is_anomaly"]]
-print(anomalies[["timestamp", "value"]])
 ```
-
-## Data Format Reference
-
-MetriSight expects a pandas DataFrame with at minimum:
-
-| Column | Required | Type | Notes |
-|--------|----------|------|-------|
-| `timestamp` | Yes | `datetime64` | Any parseable datetime format |
-| `value` | Yes | `float64` | The metric value to analyze |
-
-The detection functions add these columns to the output:
-
-| Column | Added by | Description |
-|--------|----------|-------------|
-| `is_anomaly` | Both methods | `True` if the point is anomalous |
-| `upper_bound` | Both methods | Upper threshold boundary |
-| `lower_bound` | Both methods | Lower threshold boundary |
-| `z_score` | Z-Score only | Standard deviations from mean |
-| `rolling_mean` | Moving Avg only | Rolling window mean |
-| `rolling_std` | Moving Avg only | Rolling window std deviation |
 
 ## How It Works
 
@@ -167,13 +142,15 @@ MetriSight uses two statistical methods to detect anomalies:
 
 ```
 metrisight/
-├── app.py                  # Streamlit dashboard (simulated + CSV upload)
+├── app.py                  # Streamlit dashboard
 ├── metrisight/
 │   ├── simulator.py        # Generates realistic fake metrics
 │   ├── detector.py         # Anomaly detection algorithms
+│   ├── prometheus.py       # Prometheus HTTP API client
 │   └── charts.py           # Plotly chart builders
 └── tests/
-    └── test_detector.py    # Unit tests
+    ├── test_detector.py    # Detection algorithm tests
+    └── test_prometheus.py  # Prometheus client tests
 ```
 
 ## License

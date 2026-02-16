@@ -2,10 +2,12 @@
 
 import pandas as pd
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 from metrisight.simulator import generate_metrics
 from metrisight.detector import detect_zscore, detect_moving_avg, get_anomaly_summary
 from metrisight.charts import plot_metric_with_anomalies
+from metrisight.prometheus import query_prometheus, check_connection, PrometheusError
 
 st.set_page_config(page_title="MetriSight", page_icon="📊", layout="wide")
 
@@ -16,10 +18,15 @@ st.caption("Lightweight metric anomaly detection dashboard")
 with st.sidebar:
     st.header("Configuration")
 
-    data_source = st.radio("Data Source", ["simulated", "csv_upload"], format_func=lambda x: {
-        "simulated": "Simulated Metrics",
-        "csv_upload": "Upload CSV",
-    }[x])
+    data_source = st.radio(
+        "Data Source",
+        ["simulated", "prometheus", "csv_upload"],
+        format_func=lambda x: {
+            "simulated": "Simulated Metrics",
+            "prometheus": "Prometheus (Live)",
+            "csv_upload": "Upload CSV",
+        }[x],
+    )
 
     st.divider()
 
@@ -29,6 +36,8 @@ with st.sidebar:
             "memory": "Memory Usage (%)",
             "latency": "Response Latency (ms)",
         }[x])
+    elif data_source == "prometheus":
+        metric = "prometheus"
     else:
         metric = "custom"
 
@@ -59,17 +68,93 @@ with st.sidebar:
 
         regenerate = st.button("🔄 Regenerate Data", use_container_width=True)
 
+    if data_source == "prometheus":
+        st.divider()
+        st.subheader("Prometheus")
+
+        prom_url = st.text_input(
+            "Prometheus URL",
+            value="http://localhost:9090",
+            help="Base URL of your Prometheus instance",
+        )
+
+        prom_query = st.text_input(
+            "PromQL Query",
+            value='rate(node_cpu_seconds_total{mode="idle"}[5m])',
+            help="PromQL query that returns a single time series",
+        )
+
+        lookback = st.selectbox(
+            "Lookback Window",
+            [1, 6, 24, 168],
+            index=2,
+            format_func=lambda x: {1: "1 hour", 6: "6 hours", 24: "24 hours", 168: "7 days"}[x],
+        )
+
+        step = st.selectbox(
+            "Resolution",
+            [15, 30, 60, 300],
+            index=2,
+            format_func=lambda x: {15: "15s", 30: "30s", 60: "1m", 300: "5m"}[x],
+        )
+
+        refresh_interval = st.selectbox(
+            "Auto-Refresh",
+            [0, 15, 30, 60, 300],
+            index=0,
+            format_func=lambda x: {
+                0: "Off",
+                15: "Every 15s",
+                30: "Every 30s",
+                60: "Every 1m",
+                300: "Every 5m",
+            }[x],
+        )
+
+        # Connection test button
+        if st.button("🔌 Test Connection", use_container_width=True):
+            with st.spinner("Connecting..."):
+                ok, msg = check_connection(prom_url)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+
+# --- Auto-refresh for Prometheus streaming ---
+if data_source == "prometheus" and refresh_interval > 0:
+    st_autorefresh(interval=refresh_interval * 1000, key="prom_refresh")
+
 # --- Load data ---
 raw_df = None
+duration_label = ""
 
-if data_source == "csv_upload":
+if data_source == "prometheus":
+    if not prom_url or not prom_query:
+        st.info("Enter a Prometheus URL and PromQL query in the sidebar to get started.")
+        st.stop()
+
+    try:
+        with st.spinner("Querying Prometheus..."):
+            raw_df = query_prometheus(
+                url=prom_url,
+                query=prom_query,
+                lookback_hours=lookback,
+                step_seconds=step,
+            )
+        if len(raw_df) == 0:
+            st.warning("Prometheus returned no data for this query. Check your PromQL expression.")
+            st.stop()
+        duration_label = {1: "1h", 6: "6h", 24: "24h", 168: "7d"}[lookback]
+    except PrometheusError as e:
+        st.error(f"Prometheus error: {e}")
+        st.stop()
+
+elif data_source == "csv_upload":
     st.subheader("Upload Your Metric Data")
     st.markdown("""
     Upload a CSV file with your time-series metric data. Required columns:
     - **`timestamp`** — datetime (e.g., `2024-01-15 10:30:00`)
     - **`value`** — numeric metric value
-
-    [Download sample CSV](https://gist.githubusercontent.com/) or use the format below:
     """)
     st.code("timestamp,value\n2024-01-15 10:00:00,45.2\n2024-01-15 10:01:00,47.8\n2024-01-15 10:02:00,44.1", language="csv")
 
@@ -77,7 +162,6 @@ if data_source == "csv_upload":
     if uploaded_file is not None:
         try:
             raw_df = pd.read_csv(uploaded_file)
-            # Validate required columns
             if "timestamp" not in raw_df.columns or "value" not in raw_df.columns:
                 st.error("CSV must have `timestamp` and `value` columns. Found: " + ", ".join(raw_df.columns))
                 raw_df = None
@@ -89,6 +173,7 @@ if data_source == "csv_upload":
         except Exception as e:
             st.error(f"Failed to parse CSV: {e}")
             raw_df = None
+
 else:
     cache_key = f"{metric}_{duration}_{seed}"
     if regenerate or cache_key not in st.session_state:
@@ -96,9 +181,10 @@ else:
             metric_name=metric, duration_hours=duration, seed=seed
         )
     raw_df = st.session_state[cache_key]
+    duration_label = f"{duration}h"
 
 if raw_df is None or len(raw_df) == 0:
-    st.info("Upload a CSV file to get started, or switch to Simulated Metrics in the sidebar.")
+    st.info("Upload a CSV file to get started, or switch to another data source in the sidebar.")
     st.stop()
 
 if method == "zscore":
@@ -113,7 +199,11 @@ col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Data Points", f"{summary['total_points']:,}")
 col2.metric("Anomalies Detected", summary["anomaly_count"])
 col3.metric("Anomaly Rate", f"{summary['anomaly_pct']}%")
-col4.metric("Time Range", f"{duration}h")
+if duration_label:
+    col4.metric("Time Range", duration_label)
+else:
+    time_span = summary["time_range_end"] - summary["time_range_start"]
+    col4.metric("Time Range", str(time_span).split(".")[0])
 
 # --- Chart ---
 fig = plot_metric_with_anomalies(df, metric_name=metric, detection_method=method)

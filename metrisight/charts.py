@@ -8,12 +8,16 @@ METRIC_UNITS = {
     "cpu": "%",
     "memory": "%",
     "latency": "ms",
+    "prometheus": "",
+    "custom": "",
 }
 
 METRIC_LABELS = {
     "cpu": "CPU Usage",
     "memory": "Memory Usage",
     "latency": "Response Latency",
+    "prometheus": "Prometheus Metric",
+    "custom": "Custom Metric",
 }
 
 
