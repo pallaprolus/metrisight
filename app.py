@@ -30,6 +30,10 @@ with st.sidebar:
 
     st.divider()
 
+    # Reset Prometheus connection when switching away
+    if data_source != "prometheus":
+        st.session_state.pop("prom_connected", None)
+
     if data_source == "simulated":
         metric = st.selectbox("Metric", ["cpu", "memory", "latency"], format_func=lambda x: {
             "cpu": "CPU Usage (%)",
@@ -139,6 +143,8 @@ with st.sidebar:
             if prom_basic_user and prom_basic_pass:
                 prom_basic_auth = (prom_basic_user, prom_basic_pass)
 
+        st.divider()
+
         # Connection test button
         if st.button("🔌 Test Connection", use_container_width=True):
             with st.spinner("Connecting..."):
@@ -152,8 +158,12 @@ with st.sidebar:
             else:
                 st.error(msg)
 
+        # Connect & start querying
+        if st.button("▶ Connect & Query", use_container_width=True, type="primary"):
+            st.session_state["prom_connected"] = True
+
 # --- Auto-refresh for Prometheus streaming ---
-if data_source == "prometheus" and refresh_interval > 0:
+if data_source == "prometheus" and st.session_state.get("prom_connected") and refresh_interval > 0:
     st_autorefresh(interval=refresh_interval * 1000, key="prom_refresh")
 
 # --- Load data ---
@@ -161,8 +171,14 @@ raw_df = None
 duration_label = ""
 
 if data_source == "prometheus":
+    if not st.session_state.get("prom_connected"):
+        st.info(
+            "Configure your Prometheus connection in the sidebar, then click **Connect & Query** to start."
+        )
+        st.stop()
+
     if not prom_url or not prom_query:
-        st.info("Enter a Prometheus URL and PromQL query in the sidebar to get started.")
+        st.info("Enter a Prometheus URL and PromQL query in the sidebar.")
         st.stop()
 
     try:
